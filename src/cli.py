@@ -26,6 +26,7 @@ except ImportError:
 from ghas_cli.utils import (
     actions,
     dependabot,
+    organization,
     issues,
     repositories,
     roles,
@@ -107,6 +108,77 @@ def vulns_alerts_list(repos: str, organization: str, status: str, token: str) ->
     )
     click.echo(repositories_alerts)
     return repositories_alerts
+
+
+@vuln_alerts.command("list_analyses")
+@click.option(
+    "-r",
+    "--repository",
+    prompt="Repository name",
+    type=str,
+)
+@click.option(
+    "-f",
+    "--format",
+    prompt="Output format",
+    type=click.Choice(
+        ["human", "json"],
+        case_sensitive=False,
+    ),
+    default="human",
+)
+@click.option("-o", "--organization", prompt="Organization name", type=str)
+@click.option(
+    "-t",
+    "--token",
+    prompt=False,
+    type=str,
+    default=None,
+    hide_input=True,
+    confirmation_prompt=False,
+    show_envvar=True,
+)
+def vulns_analyses_list(repository: str, format: str, organization: str, token: str) -> Dict:
+    """Get CodeQL analyses for a single repository, grouped by commit SHA"""
+
+    def print_human(analyses):
+        click.echo(f"\nCodeQL Analyses for {organization}/{clean_repo_name}:")
+        click.echo("=" * 60)
+        
+        if not analyses_by_commit:
+            click.echo("No analyses found.")
+        else:
+            for commit_sha, analyses in analyses_by_commit.items():
+                click.echo(f"\nCommit: {commit_sha}")
+                click.echo("-" * 40)
+                
+                for analysis in analyses:
+                    click.echo(f"  Analysis ID: {analysis.get('id') or 'N/A'}")
+                    click.echo(f"  Tool: {analysis.get('tool') or 'N/A'}")
+                    click.echo(f"  Created: {analysis.get('created_at') or 'N/A'}")
+                    click.echo(f"  Results Count: {analysis.get('results_count') or 'N/A'}")
+                    click.echo(f"  Rules Count: {analysis.get('rules_count') or 'N/A'}")
+                    click.echo(f"  Category: {analysis.get('category') or 'N/A'}")
+                    click.echo(f"  Environment: {analysis.get('environment') or 'N/A'}")
+                    click.echo(f"  Warning: {analysis.get('warning') or 'N/A'}")
+                    click.echo(f"  Error: {analysis.get('error') or 'N/A'}")
+                    click.echo()
+
+
+    clean_repo_name = repositories.clean_repo_name(repository)
+
+    analyses_by_commit = vulns.get_codeql_analyses_repo(
+        clean_repo_name, organization, token
+    )
+    
+    if format == "json":
+        import json
+        click.echo(json.dumps(analyses_by_commit, indent=2))
+    else:
+        print_human(analyses_by_commit)
+        
+    
+    return analyses_by_commit
 
 
 ################
@@ -1011,6 +1083,95 @@ def actions_set_permissions(
     click.echo(permissions)
 
 
+@actions_cli.command("get_ghas_runs")
+@click.option(
+    "-r",
+    "--repository",
+    prompt="Repository name",
+    type=str,
+)
+@click.option(
+    "-d",
+    "--days",
+    prompt="Number of days to look back",
+    type=int,
+    default=3,
+)
+@click.option(
+    "-fs",
+    "--filter-status",
+    type=click.Choice(
+        ["completed", "action_required", "cancelled", "failure", "neutral", "skipped", "stale", "success", "timed_out", "in_progress", "queued", "requested", "waiting", "pending"],
+        case_sensitive=False,
+    ),
+    default=None,
+    help="Filter by workflow run status (optional)",
+)
+@click.option(
+    "-f",
+    "--format",
+    prompt="Output format",
+    type=click.Choice(
+        ["human", "json"],
+        case_sensitive=False,
+    ),
+    default="human",
+)
+@click.option(
+    "-t",
+    "--token",
+    prompt=False,
+    type=str,
+    default=None,
+    hide_input=True,
+    confirmation_prompt=False,
+    show_envvar=True,
+)
+@click.option("-o", "--organization", prompt="Organization name", type=str)
+def actions_get_ghas_runs(
+    repository: str,
+    days: int,
+    filter_status: str,
+    format: str,
+    organization: str,
+    token: str,
+) -> None:
+    """Get GHAS-related workflow runs for a repository (default: last 3 days)"""
+
+    def print_human(runs):
+        status_info = f" with status '{filter_status}'" if filter_status else ""
+        if not runs:
+            click.echo(f"No GHAS-related workflow runs found in the last {days} days for {organization}/{clean_repo_name}{status_info}")
+        else:
+            click.echo(f"GHAS Workflow Runs for {organization}/{clean_repo_name} (last {days} days{status_info}):")
+            click.echo("=" * 60)
+            for run in runs:
+                click.echo(f"Run ID: {run.get('id') or 'N/A'}")
+                click.echo(f"Name: {run.get('name') or 'N/A'}")
+                click.echo(f"Conclusion: {run.get('conclusion') or 'N/A'}")
+                click.echo(f"Created: {run.get('created_at') or 'N/A'}")
+                click.echo(f"Author: {run.get('head_commit', {}).get('author', {}).get('name') or 'N/A'}")
+                click.echo(f"Actor: {run.get('actor', {}).get('login') or 'N/A'}")
+                click.echo(f"URL: {run.get('html_url') or 'N/A'}")
+                click.echo("-" * 40)
+    
+    clean_repo_name = repositories.clean_repo_name(repository)
+
+    runs = actions.get_ghas_workflow_runs(
+        token=token,
+        organization=organization,
+        repository_name=clean_repo_name,
+        days=days,
+        status=filter_status,
+    )
+    
+    if format == "json":
+        import json
+        click.echo(json.dumps(runs, indent=2))
+    else:
+        print_human(runs)
+
+
 ###############
 # Roles #
 ###############
@@ -1591,6 +1752,238 @@ def mass_get_dependencies(
             ),
             nl=False,
         )
+
+
+##########
+# Organization #
+##########
+
+
+@cli.group(name="org")
+def org_cli() -> None:
+    """Manage organization-level operations"""
+    pass
+
+
+@org_cli.command("get_configurations")
+@click.option(
+    "-o",
+    "--org",
+    prompt="Organization name",
+    type=str,
+)
+@click.option(
+    "-f",
+    "--format",
+    prompt="Output format",
+    type=click.Choice(
+        ["human", "json"],
+        case_sensitive=False,
+    ),
+    default="human",
+)
+@click.option(
+    "-t",
+    "--token",
+    prompt=False,
+    type=str,
+    default=None,
+    hide_input=True,
+    confirmation_prompt=False,
+    show_envvar=True,
+)
+def org_get_security_configurations(
+    org: str,
+    format: str,
+    token: str,
+) -> None:
+    """Get the list of code security configurations enabled in an organization"""
+
+    def print_human(configurations):
+        click.echo(f"Code Security Configurations for Organization '{org}':")
+        click.echo("=" * 60)
+        for config in configurations:
+            click.echo(f"Configuration ID: {config.get('id') or 'N/A'}")
+            click.echo(f"Name: {config.get('name') or 'N/A'}")
+            click.echo(f"Description: {config.get('description') or 'N/A'}")
+            click.echo(f"Enabled: {config.get('enabled') or 'N/A'}")
+            click.echo("-" * 40)
+    
+    configurations = organization.get_code_security_configurations(org, token)
+    
+    if not configurations:
+        click.echo("No code security configurations found or failed to retrieve.")
+        return
+    
+    if format == "json":
+        click.echo(json.dumps(configurations, indent=2))
+    else:
+        print_human(configurations)
+
+
+@org_cli.command("attach_configuration")
+@click.option(
+    "-o",
+    "--org",
+    prompt="Organization name",
+    type=str,
+)
+@click.option(
+    "-c",
+    "--configuration-id",
+    type=str,
+    required=True,
+    help="Configuration ID to attach",
+)
+@click.option(
+    "-s",
+    "--scope",
+    prompt="Scope",
+    type=click.Choice(["selected", "all"], case_sensitive=False),
+    default="selected",
+)
+@click.option(
+    "-r",
+    "--repository-ids",
+    type=str,
+    help="Comma-separated list of repository IDs (required if scope is 'selected' and no file provided)",
+)
+@click.option(
+    "-rl",
+    "--repo-list-file",
+    type=click.File("r"),
+    help="File containing repository names, one per line (required if scope is 'selected' and no repository-ids provided)",
+)
+@click.option(
+    "-t",
+    "--token",
+    prompt=False,
+    type=str,
+    default=None,
+    hide_input=True,
+    confirmation_prompt=False,
+    show_envvar=True,
+)
+@click.option(
+    "-y",
+    "--yes",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+def org_attach_configuration(
+    org: str,
+    configuration_id: str,
+    scope: str,
+    repository_ids: str,
+    repo_list_file: Any,
+    token: str,
+    yes: bool,
+) -> None:
+    """Attach a code security configuration to repositories in an organization"""
+    
+    config_details = organization.get_code_security_configuration_details(org, configuration_id, token)
+    if not config_details:
+        click.echo(f"Error: Configuration {configuration_id} not found in organization {org}")
+        return
+    
+    using_file = repo_list_file is not None
+    using_repository_ids = repository_ids is not None
+    
+    if scope == "selected":
+        if not using_file and not using_repository_ids:
+            click.echo("Error: Either --repository-ids or --repo-list-file must be provided when scope is 'selected'")
+            return
+        if using_file and using_repository_ids:
+            click.echo("Error: Cannot use both --repository-ids and --repo-list-file. Choose one.")
+            return
+    
+    click.echo(f"\nSelected Configuration:")
+    click.echo(f"  ID: {config_details.get('id', 'N/A')}")
+    click.echo(f"  Name: {config_details.get('name', 'N/A')}")
+    click.echo(f"  Description: {config_details.get('description', 'N/A')}")
+    click.echo(f"  Enabled: {config_details.get('enabled', 'N/A')}")
+    click.echo(f"  Scope: {scope}")
+    
+    success = False
+    
+    if scope == "all":
+        click.echo(f"  Target: All repositories in the organization")
+        
+        if not yes:
+            if not click.confirm(f"\nDo you want to attach this configuration to all repositories?"):
+                click.echo("Operation cancelled.")
+                return
+        
+        success = organization.attach_code_security_configuration(
+            org=org,
+            configuration_id=configuration_id,
+            scope=scope,
+            selected_repository_ids=[],
+            token=token,
+        )
+    
+    elif using_repository_ids:
+        # Parse repository IDs
+        try:
+            selected_repository_ids = [int(rid.strip()) for rid in repository_ids.split(",")]
+        except ValueError:
+            click.echo("Error: Repository IDs must be comma-separated integers")
+            return
+        
+        click.echo(f"  Repository IDs: {', '.join(map(str, selected_repository_ids))}")
+        
+        if not yes:
+            if not click.confirm(f"\nDo you want to attach this configuration to the specified repositories?"):
+                click.echo("Operation cancelled.")
+                return
+        
+        success = organization.attach_code_security_configuration(
+            org=org,
+            configuration_id=configuration_id,
+            scope=scope,
+            selected_repository_ids=selected_repository_ids,
+            token=token,
+        )
+    
+    elif using_file:
+        repository_names = []
+        for line in repo_list_file:
+            repo_name = line.strip()
+            if repo_name and not repo_name.startswith('#'): 
+                repository_names.append(repo_name)
+        
+        if not repository_names:
+            click.echo("Error: No repository names found in the input file")
+            return
+        
+        click.echo(f"  Target Repositories ({len(repository_names)}):")
+        for repo_name in repository_names:
+            click.echo(f"    - {repo_name}")
+        
+        processed_repository_names = []
+        for repo_name in repository_names:
+            clean_repo_name = repo_name.split('/')[-1] if '/' in repo_name else repo_name
+            processed_repository_names.append(clean_repo_name)
+        
+        if not yes:
+            if not click.confirm(f"\nDo you want to attach this configuration to the listed repositories?"):
+                click.echo("Operation cancelled.")
+                return
+        
+        success = organization.attach_code_security_configuration_by_repository_names(
+            org=org,
+            configuration_id=configuration_id,
+            scope=scope,
+            repository_names=processed_repository_names,
+            token=token,
+        )
+    
+    if success:
+        repo_count = len(processed_repository_names) if processed_repository_names else "all"
+        click.echo(f"Successfully attached configuration {configuration_id} to {repo_count} repositories in organization {org}")
+    else:
+        click.echo(f"Failed to attach configuration {configuration_id} to organization {org}")
+        click.echo("Check the logs for more details.")
 
 
 if __name__ == "__main__":
